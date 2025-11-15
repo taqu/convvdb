@@ -14,14 +14,6 @@
 # Linker files
 *.ilk
 
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
 # Fortran module files
 *.mod
 *.smod
@@ -29,11 +21,8 @@
 # Compiled Static libraries
 *.lai
 *.la
-*.a
-*.lib
 
 # Executables
-*.exe
 *.out
 *.app
 
@@ -42,7 +31,7 @@
 
 # Directories
 .vs/
-bin/
-build/
+/bin
+/build
 /output
 /SmallCampfireVDB

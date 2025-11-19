@@ -15,6 +15,8 @@
 #include <tuple>
 #include <vector>
 
+namespace convvdb
+{
 enum class EPixelFormat : uint8_t
 {
     PF_Unknown = 0,
@@ -111,6 +113,16 @@ enum class EPixelFormat : uint8_t
     PF_ASTC_12x12_NORM_RG = 91,
     PF_MAX = 92,
 };
+
+using OpenVDBHalf1Grid = openvdb::HalfGrid;
+using OpenVDBFloat1Grid = openvdb::FloatGrid;
+using OpenVDBFloat2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2f, 5, 4, 3>::Type>;
+using OpenVDBFloat3Grid = openvdb::Vec3SGrid;
+using OpenVDBFloat4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4f, 5, 4, 3>::Type>;
+using OpenVDBDouble1Grid = openvdb::DoubleGrid;
+using OpenVDBDouble2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2d, 5, 4, 3>::Type>;
+using OpenVDBDouble3Grid = openvdb::Vec3DGrid;
+using OpenVDBDouble4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4d, 5, 4, 3>::Type>;
 
 struct IntVector3
 {
@@ -337,16 +349,6 @@ Transform getTransform(const openvdb::Mat4d& mat)
 
 static OpenVDBGridInfo getOpenVDBGridInfo(openvdb::GridBase::Ptr grid, uint32_t gridIndex)
 {
-    using OpenVDBHalf1Grid = openvdb::HalfGrid;
-    using OpenVDBFloat1Grid = openvdb::FloatGrid;
-    using OpenVDBFloat2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2f, 5, 4, 3>::Type>;
-    using OpenVDBFloat3Grid = openvdb::Vec3SGrid;
-    using OpenVDBFloat4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4f, 5, 4, 3>::Type>;
-    using OpenVDBDouble1Grid = openvdb::DoubleGrid;
-    using OpenVDBDouble2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2d, 5, 4, 3>::Type>;
-    using OpenVDBDouble3Grid = openvdb::Vec3DGrid;
-    using OpenVDBDouble4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4d, 5, 4, 3>::Type>;
-
     openvdb::CoordBBox volumeActiveAABB = grid->evalActiveVoxelBoundingBox();
     openvdb::Coord volumeActiveDim = grid->evalActiveVoxelDim();
     openvdb::math::MapBase::ConstPtr mapBase = grid->constTransform().baseMap();
@@ -402,6 +404,18 @@ template<class T>
 cppimg::DDS::Format toFormat()
 {
     return cppimg::DDS::Format::UNKNOWN;
+}
+
+template<>
+cppimg::DDS::Format toFormat<int8_t>()
+{
+    return cppimg::DDS::Format::R8_SINT;
+}
+
+template<>
+cppimg::DDS::Format toFormat<uint8_t>()
+{
+    return cppimg::DDS::Format::R8_UINT;
 }
 
 template<>
@@ -482,14 +496,123 @@ void convert(const openvdb::Vec4d& x0, openvdb::Vec4f& x1)
     x1.w() = static_cast<float>(x0.w());
 }
 
+template<>
+void convert(const openvdb::Half& x0, int8_t& x1)
+{
+    x1 = static_cast<float>(x0);
+}
+
+namespace
+{
+    int8_t toInt8(float x)
+    {
+        x = std::clamp(x, -1.0f, 1.0f);
+        if(0.0f <= x) {
+            int32_t xi = static_cast<int32_t>(x * 128.0f);
+            return xi <= 127 ? static_cast<int8_t>(xi) : 127;
+        } else {
+            int32_t xi = static_cast<int32_t>(x * -129.0f);
+            return -128 <= xi ? static_cast<int8_t>(xi) : -128;
+        }
+    }
+
+    uint8_t toUint8(float x)
+    {
+        x = std::clamp(x, 0.0f, 1.0f);
+        int32_t xi = static_cast<int32_t>(x * 256.0f);
+        return xi <= 255 ? static_cast<uint8_t>(xi) : 255;
+    }
+
+    uint8_t toUint8(double x)
+    {
+        x = std::clamp(x, 0.0, 1.0);
+        int32_t xi = static_cast<int32_t>(x * 256.0);
+        return xi <= 255 ? static_cast<uint8_t>(xi) : 255;
+    }
+} // namespace
+
+template<>
+void convert(const openvdb::Half& x0, uint8_t& x1)
+{
+    assert(0.0f <= static_cast<float>(x0) && static_cast<float>(x0) <= 1.0f);
+    x1 = toUint8(static_cast<float>(x0));
+}
+
+template<>
+void convert(const float& x0, uint8_t& x1)
+{
+    assert(0.0f <= x0 && x0 <= 1.0f);
+    x1 = toUint8(x0);
+}
+
+template<>
+void convert(const double& x0, uint8_t& x1)
+{
+    assert(0.0 <= x0 && x0 <= 1.0);
+    x1 = toUint8(x0);
+}
+
+template<class T>
+void convertTo16(const T&, uint16_t&)
+{
+}
+
+template<>
+void convertTo16<openvdb::Half>(const openvdb::Half& x0, uint16_t& x1)
+{
+    x1 = x0.bits();
+}
+
+template<>
+void convertTo16<float>(const float& x0, uint16_t& x1)
+{
+    openvdb::Half h(x0);
+    x1 = h.bits();
+}
+
+template<>
+void convertTo16<double>(const double& x0, uint16_t& x1)
+{
+    openvdb::Half h(static_cast<float>(x0));
+    x1 = h.bits();
+}
+
+std::string getFilepath(const std::u8string& path, const std::u8string& basename, int32_t countDigits, const std::u8string& output_dir, openvdb::GridBase::ConstPtr grid)
+{
+    std::string name = std::filesystem::path(path).stem().string();
+    std::string_view digits = std::string_view(name).substr(name.size() - countDigits);
+    std::string_view bname = std::string_view((const char*)basename.c_str());
+    std::string final_name = (const char*)basename.c_str();
+    final_name += grid->getName();
+    final_name += "_";
+    final_name += digits;
+    final_name += ".dds";
+    std::string final_path = std::filesystem::path(output_dir).append(final_name).string();
+    return final_path;
+}
+
+std::string getFilepath(const std::u8string& path, const std::u8string& basename, int32_t countDigits, const std::u8string& output_dir, const char* kind)
+{
+    std::string name = std::filesystem::path(path).stem().string();
+    std::string_view digits = std::string_view(name).substr(name.size() - countDigits);
+    std::string_view bname = std::string_view((const char*)basename.c_str());
+    std::string final_name = (const char*)basename.c_str();
+    final_name += kind;
+    final_name += "_";
+    final_name += digits;
+    final_name += ".dds";
+    std::string final_path = std::filesystem::path(output_dir).append(final_name).string();
+    return final_path;
+}
+
 template<class GridType, class ValueType>
 bool saveAsDDS(const std::u8string& path, const std::u8string& basename, int32_t countDigits, const std::u8string& output_dir, const openvdb::GridBase::Ptr grid)
 {
     openvdb::CoordBBox volumeActiveAABB = grid->evalActiveVoxelBoundingBox();
     openvdb::Coord activeVoxelDim = grid->evalActiveVoxelDim();
-    int32_t width = activeVoxelDim.x()+1;
-    int32_t height = activeVoxelDim.y()+1;
-    int32_t depth = activeVoxelDim.z()+1;
+    int32_t width = activeVoxelDim.x() + 1;
+    int32_t height = activeVoxelDim.y() + 1;
+    int32_t depth = activeVoxelDim.z() + 1;
     ValueType* pixels = new ValueType[width * height * depth];
     ::memset(pixels, 0, sizeof(ValueType) * width * height * depth);
     const GridType* ptr = ((const GridType*)grid.get());
@@ -509,15 +632,7 @@ bool saveAsDDS(const std::u8string& path, const std::u8string& basename, int32_t
         convert(value, pixels[index]);
     }
 
-    std::string name = std::filesystem::path(path).stem().string();
-    std::string_view digits = std::string_view(name).substr(name.size() - countDigits);
-    std::string_view bname = std::string_view((const char*)basename.c_str());
-    std::string final_name = (const char*)basename.c_str();
-    final_name += grid->getName();
-    final_name += "_";
-    final_name += digits;
-    final_name += ".dds";
-    std::string final_path = std::filesystem::path(output_dir).append(final_name).string();
+    std::string final_path = getFilepath(path, basename, countDigits, output_dir, grid);
     cppimg::OFStream file;
     if(!file.open(final_path.c_str())) {
         delete[] pixels;
@@ -538,59 +653,243 @@ bool saveAsDDS(const std::u8string& path, const std::u8string& basename, int32_t
     bool result = cppimg::DDS::write(file, texDesc, pixels);
     file.close();
     delete[] pixels;
-    #ifdef _DEBUG
+#ifdef _DEBUG
     if(result) {
         std::cout << "Saved: " << final_path << std::endl;
-    }else{
+    } else {
         std::cout << "Failed to save: " << final_path << std::endl;
     }
-    #endif
+#endif
     return result;
 }
 
-static bool saveAsDDS(const std::u8string& path, const std::u8string& basename, int32_t countDigits, const std::u8string& output_dir, const openvdb::GridBase::Ptr grid)
+template<class GridType>
+bool saveDensityAsDDS(
+    const std::u8string& path,
+    const std::u8string& basename,
+    int32_t countDigits,
+    const std::u8string& output_dir,
+    openvdb::GridBase::ConstPtr grid)
 {
-    using OpenVDBHalf1Grid = openvdb::HalfGrid;
-    using OpenVDBHalf2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2H, 5, 4, 3>::Type>;
-    using OpenVDBHalf3Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec3H, 5, 4, 3>::Type>;
-    using OpenVDBHalf4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4H, 5, 4, 3>::Type>;
-    using OpenVDBFloat1Grid = openvdb::FloatGrid;
-    using OpenVDBFloat2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2f, 5, 4, 3>::Type>;
-    using OpenVDBFloat3Grid = openvdb::Vec3SGrid;
-    using OpenVDBFloat4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4f, 5, 4, 3>::Type>;
-    using OpenVDBDouble1Grid = openvdb::DoubleGrid;
-    using OpenVDBDouble2Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec2d, 5, 4, 3>::Type>;
-    using OpenVDBDouble3Grid = openvdb::Vec3DGrid;
-    using OpenVDBDouble4Grid = openvdb::Grid<openvdb::tree::Tree4<openvdb::Vec4d, 5, 4, 3>::Type>;
+    openvdb::CoordBBox volumeActiveAABB = grid->evalActiveVoxelBoundingBox();
+    openvdb::Coord activeVoxelDim = grid->evalActiveVoxelDim();
+    int32_t width = activeVoxelDim.x() + 1;
+    int32_t height = activeVoxelDim.y() + 1;
+    int32_t depth = activeVoxelDim.z() + 1;
+    uint8_t* pixels = new uint8_t[width * height * depth];
+    ::memset(pixels, 0, sizeof(uint8_t) * width * height * depth);
+    const GridType* ptr = ((const GridType*)grid.get());
+    for(typename GridType::ValueOnCIter iter = ptr->cbeginValueOn(); iter.test(); ++iter) {
+        if(!iter.isVoxelValue()) {
+            continue;
+        }
+        const auto& value = *iter;
+        openvdb::Coord coord = iter.getCoord();
+        coord.x() -= volumeActiveAABB.min().x();
+        coord.y() -= volumeActiveAABB.min().y();
+        coord.z() -= volumeActiveAABB.min().z();
+        assert(0 <= coord.x() && coord.x() < width);
+        assert(0 <= coord.y() && coord.y() < height);
+        assert(0 <= coord.z() && coord.z() < depth);
+        int32_t index = (coord.z() * height + coord.y()) * width + coord.x();
+        convert(value, pixels[index]);
+    }
 
+    std::string final_path = getFilepath(path, basename, countDigits, output_dir, grid);
+    cppimg::OFStream file;
+    if(!file.open(final_path.c_str())) {
+        delete[] pixels;
+        return false;
+    }
+
+    cppimg::DDS::TextureDesc texDesc;
+    texDesc.dimension_ = cppimg::DDS::ResourceDimension::Texture3D;
+    texDesc.width_ = static_cast<uint32_t>(width);
+    texDesc.height_ = static_cast<uint32_t>(height);
+    texDesc.depth_ = static_cast<uint32_t>(depth);
+    texDesc.mipmapCount_ = 1;
+    texDesc.arraySize_ = 1;
+    texDesc.format_ = toFormat<uint8_t>();
+    texDesc.flag_ = cppimg::DDS::ResourceMiscFlag::None;
+    texDesc.alphaMode_ = cppimg::DDS::AlphaMode::Straight;
+    texDesc.pitch_ = texDesc.calcPitchSize();
+    bool result = cppimg::DDS::write(file, texDesc, pixels);
+    file.close();
+    delete[] pixels;
+#ifdef _DEBUG
+    if(result) {
+        std::cout << "Saved: " << final_path << std::endl;
+    } else {
+        std::cout << "Failed to save: " << final_path << std::endl;
+    }
+#endif
+    return result;
+}
+
+static bool saveAsDDS(
+    const std::u8string& path,
+    const std::u8string& basename,
+    int32_t countDigits,
+    const std::u8string& output_dir,
+    const openvdb::GridBase::Ptr grid)
+{
     if(grid->isType<OpenVDBHalf1Grid>()) {
         return saveAsDDS<OpenVDBHalf1Grid, openvdb::Half>(path, basename, countDigits, output_dir, grid);
-    //} else if(grid->isType<OpenVDBHalf2Grid>()) {
-    //    return saveAsDDS<OpenVDBHalf2Grid, openvdb::Vec2H>(path, basename, countDigits, grid);
-    //} else if(grid->isType<OpenVDBHalf3Grid>()) {
-    //    return saveAsDDS<OpenVDBHalf3Grid, openvdb::Vec3H>(path, basename, countDigits, grid);
-    //} else if(grid->isType<OpenVDBHalf4Grid>()) {
-    //    return saveAsDDS<OpenVDBHalf4Grid, openvdb::Vec4H>(path, basename, countDigits, grid);
 
     } else if(grid->isType<OpenVDBFloat1Grid>()) {
-        return saveAsDDS<OpenVDBFloat1Grid, float>(path, basename, countDigits, output_dir,grid);
-    } else if(grid->isType<OpenVDBFloat2Grid>()) {
-        return saveAsDDS<OpenVDBFloat2Grid, openvdb::Vec2f>(path, basename, countDigits, output_dir,grid);
-    } else if(grid->isType<OpenVDBFloat3Grid>()) {
-        return saveAsDDS<OpenVDBFloat3Grid, openvdb::Vec3f>(path, basename, countDigits, output_dir,grid);
-    } else if(grid->isType<OpenVDBFloat4Grid>()) {
-        return saveAsDDS<OpenVDBFloat4Grid, openvdb::Vec4f>(path, basename, countDigits, output_dir,grid);
+        return saveAsDDS<OpenVDBFloat1Grid, float>(path, basename, countDigits, output_dir, grid);
 
     } else if(grid->isType<OpenVDBDouble1Grid>()) {
-        return saveAsDDS<OpenVDBDouble1Grid, float>(path, basename, countDigits, output_dir,grid);
-    } else if(grid->isType<OpenVDBDouble2Grid>()) {
-        return saveAsDDS<OpenVDBDouble2Grid, openvdb::Vec2f>(path, basename, countDigits, output_dir,grid);
-    } else if(grid->isType<OpenVDBDouble3Grid>()) {
-        return saveAsDDS<OpenVDBDouble3Grid, openvdb::Vec3f>(path, basename, countDigits, output_dir,grid);
-    } else if(grid->isType<OpenVDBDouble4Grid>()) {
-        return saveAsDDS<OpenVDBDouble4Grid, openvdb::Vec4f>(path, basename, countDigits, output_dir,grid);
+        return saveAsDDS<OpenVDBDouble1Grid, float>(path, basename, countDigits, output_dir, grid);
     }
     return false;
+}
+
+static bool saveDensityAsDDS(
+    const std::u8string& path,
+    const std::u8string& basename,
+    int32_t countDigits,
+    const std::u8string& output_dir,
+    openvdb::GridBase::ConstPtr grid_density)
+{
+    assert(nullptr != grid_density);
+    if(grid_density->isType<OpenVDBHalf1Grid>()) {
+        return saveDensityAsDDS<OpenVDBHalf1Grid>(path, basename, countDigits, output_dir, grid_density);
+
+    } else if(grid_density->isType<OpenVDBFloat1Grid>()) {
+        return saveDensityAsDDS<OpenVDBFloat1Grid>(path, basename, countDigits, output_dir, grid_density);
+
+    } else if(grid_density->isType<OpenVDBDouble1Grid>()) {
+        return saveDensityAsDDS<OpenVDBDouble1Grid>(path, basename, countDigits, output_dir, grid_density);
+    }
+    return false;
+}
+
+template<class GridType>
+void copyAsFloat16(uint16_t* pixels, openvdb::GridBase::ConstPtr grid, int32_t element)
+{
+    assert(0 <= element && element < 2);
+    openvdb::CoordBBox volumeActiveAABB = grid->evalActiveVoxelBoundingBox();
+    openvdb::Coord activeVoxelDim = grid->evalActiveVoxelDim();
+    int32_t width = activeVoxelDim.x() + 1;
+    int32_t height = activeVoxelDim.y() + 1;
+    int32_t depth = activeVoxelDim.z() + 1;
+    const GridType* ptr = ((const GridType*)grid.get());
+    for(typename GridType::ValueOnCIter iter = ptr->cbeginValueOn(); iter.test(); ++iter) {
+        if(!iter.isVoxelValue()) {
+            continue;
+        }
+        const auto& value = *iter;
+        openvdb::Coord coord = iter.getCoord();
+        coord.x() -= volumeActiveAABB.min().x();
+        coord.y() -= volumeActiveAABB.min().y();
+        coord.z() -= volumeActiveAABB.min().z();
+        assert(0 <= coord.x() && coord.x() < width);
+        assert(0 <= coord.y() && coord.y() < height);
+        assert(0 <= coord.z() && coord.z() < depth);
+        int32_t index = (coord.z() * height + coord.y()) * width + coord.x();
+        convertTo16(value, pixels[2 * index + element]);
+    }
+}
+
+static bool saveAsDDS(
+    const std::u8string& path,
+    const std::u8string& basename,
+    int32_t countDigits,
+    const std::u8string& output_dir,
+    openvdb::GridBase::ConstPtr grid_emission,
+    openvdb::GridBase::ConstPtr grid_temperature)
+{
+    assert(nullptr != grid_emission || nullptr != grid_temperature);
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t depth = 0;
+    if(nullptr != grid_emission && nullptr != grid_temperature) {
+        openvdb::Coord activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
+        openvdb::Coord activeVoxelDim1 = grid_temperature->evalActiveVoxelDim();
+        if(activeVoxelDim0.x() != activeVoxelDim1.x()
+           || activeVoxelDim0.y() != activeVoxelDim1.y()
+           || activeVoxelDim0.z() != activeVoxelDim1.z()) {
+            return false;
+        }
+        width = activeVoxelDim0.x() + 1;
+        height = activeVoxelDim0.y() + 1;
+        depth = activeVoxelDim0.z() + 1;
+    } else if(nullptr != grid_emission) {
+        openvdb::Coord activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
+        width = activeVoxelDim0.x() + 1;
+        height = activeVoxelDim0.y() + 1;
+        depth = activeVoxelDim0.z() + 1;
+    } else if(nullptr != grid_temperature) {
+        openvdb::Coord activeVoxelDim0 = grid_temperature->evalActiveVoxelDim();
+        width = activeVoxelDim0.x() + 1;
+        height = activeVoxelDim0.y() + 1;
+        depth = activeVoxelDim0.z() + 1;
+    } else {
+        return false;
+    }
+    uint16_t* pixels = new uint16_t[2 * width * height * depth];
+    ::memset(pixels, 0, sizeof(uint16_t) * 2 * width * height * depth);
+
+    if(nullptr != grid_emission) {
+        if(grid_emission->isType<OpenVDBHalf1Grid>()) {
+            copyAsFloat16<OpenVDBHalf1Grid>(pixels, grid_emission, 0);
+
+        } else if(grid_emission->isType<OpenVDBFloat1Grid>()) {
+            copyAsFloat16<OpenVDBFloat1Grid>(pixels, grid_emission, 0);
+
+        } else if(grid_emission->isType<OpenVDBDouble1Grid>()) {
+            copyAsFloat16<OpenVDBDouble1Grid>(pixels, grid_emission, 0);
+        } else {
+            delete[] pixels;
+            return false;
+        }
+    }
+
+    if(nullptr != grid_temperature) {
+        if(grid_temperature->isType<OpenVDBHalf1Grid>()) {
+            copyAsFloat16<OpenVDBHalf1Grid>(pixels, grid_temperature, 1);
+
+        } else if(grid_temperature->isType<OpenVDBFloat1Grid>()) {
+            copyAsFloat16<OpenVDBFloat1Grid>(pixels, grid_temperature, 1);
+
+        } else if(grid_temperature->isType<OpenVDBDouble1Grid>()) {
+            copyAsFloat16<OpenVDBDouble1Grid>(pixels, grid_temperature, 1);
+        } else {
+            delete[] pixels;
+            return false;
+        }
+    }
+
+    std::string final_path = getFilepath(path, basename, countDigits, output_dir, "emission_temperature");
+    cppimg::OFStream file;
+    if(!file.open(final_path.c_str())) {
+        delete[] pixels;
+        return false;
+    }
+
+    cppimg::DDS::TextureDesc texDesc;
+    texDesc.dimension_ = cppimg::DDS::ResourceDimension::Texture3D;
+    texDesc.width_ = static_cast<uint32_t>(width);
+    texDesc.height_ = static_cast<uint32_t>(height);
+    texDesc.depth_ = static_cast<uint32_t>(depth);
+    texDesc.mipmapCount_ = 1;
+    texDesc.arraySize_ = 1;
+    texDesc.format_ = toFormat<openvdb::Vec2H>();
+    texDesc.flag_ = cppimg::DDS::ResourceMiscFlag::None;
+    texDesc.alphaMode_ = cppimg::DDS::AlphaMode::Straight;
+    texDesc.pitch_ = texDesc.calcPitchSize();
+    bool result = cppimg::DDS::write(file, texDesc, pixels);
+    file.close();
+    delete[] pixels;
+#ifdef _DEBUG
+    if(result) {
+        std::cout << "Saved: " << final_path << std::endl;
+    } else {
+        std::cout << "Failed to save: " << final_path << std::endl;
+    }
+#endif
+    return result;
 }
 
 static std::tuple<std::u8string, int32_t> getVDBSequenceBaseFileName(const std::u8string& stem)
@@ -653,12 +952,14 @@ static std::tuple<std::vector<std::u8string>, std::u8string, int32_t> findOpenVD
     std::sort(files.begin(), files.end());
     return std::make_tuple(files, base_name, count_digits);
 }
+} // namespace convvdb
 
 int main(int argc, char** argv)
 {
     args::ArgumentParser parser("This is a test program.", "This goes after the options.");
     args::HelpFlag help(parser, "help", "Display this help menu", {'h', "help"});
     args::ValueFlag<std::string> option_output(parser, "output", "The output directory", {'o', "output"});
+    args::ValueFlag<bool> option_quantize(parser, "quantize", "Quantize output textures", {'q', "quantize"}, true);
     args::Positional<std::string> option_filepath(parser, "filepath", "The path to vdb");
     try {
         parser.ParseCLI(argc, argv);
@@ -688,11 +989,12 @@ int main(int argc, char** argv)
         std::cerr << parser;
         return -1;
     }
+    std::cerr << parser;
     std::u8string output_dir;
-    if(option_output){
+    if(option_output) {
         output_dir = (const char8_t*)args::get(option_output).c_str();
         if(!std::filesystem::exists(output_dir)) {
-            if(!std::filesystem::create_directories(output_dir)){
+            if(!std::filesystem::create_directories(output_dir)) {
                 std::cerr << parser;
                 return -1;
             }
@@ -703,7 +1005,7 @@ int main(int argc, char** argv)
             return -1;
         }
         output_dir = std::filesystem::absolute(output_dir).u8string();
-    }else{
+    } else {
         std::filesystem::path path(filepath);
         output_dir = path.parent_path().u8string();
         if(!std::filesystem::exists(output_dir) || !std::filesystem::is_directory(output_dir)) {
@@ -711,7 +1013,11 @@ int main(int argc, char** argv)
             return -1;
         }
     }
-    auto [files, basename, countDigits] = findOpenVDBSequenceFiles(filepath);
+    bool quantize = true;
+    if(option_quantize) {
+        quantize = args::get(option_quantize);
+    }
+    auto [files, basename, countDigits] = convvdb::findOpenVDBSequenceFiles(filepath);
 
     // Initialize the OpenVDB library.  This must be called at least
     // once per program and may safely be called multiple times.
@@ -724,8 +1030,42 @@ int main(int argc, char** argv)
             stream = openvdb::io::Stream(istream, false);
             std::filesystem::path path(f);
             openvdb::GridPtrVecPtr grids = stream.getGrids();
-            for(const openvdb::GridBase::Ptr& grid: *grids) {
-                saveAsDDS(f, basename, countDigits, output_dir, grid);
+            if(quantize) {
+                static const openvdb::Name grid_type("grid_type");
+                static const openvdb::Name grid_type_density("density");
+                static const openvdb::Name grid_type_emission("flames");
+                static const openvdb::Name grid_type_temperature("temperature");
+
+                openvdb::GridBase::ConstPtr grid_density = nullptr;
+                openvdb::GridBase::ConstPtr grid_emission = nullptr;
+                openvdb::GridBase::ConstPtr grid_temperature = nullptr;
+                for(const openvdb::GridBase::Ptr& grid: *grids) {
+                    openvdb::StringMetadata::Ptr metadata = grid->getMetadata<openvdb::StringMetadata>(grid_type);
+                    if(nullptr == metadata) {
+                        continue;
+                    }
+                    if(grid_type_density == metadata->value()) {
+                        grid_density = grid;
+                    } else if(grid_type_emission == metadata->value()) {
+                        grid_emission = grid;
+                    } else if(grid_type_temperature == metadata->value()) {
+                        grid_temperature = grid;
+                    }
+                }
+                if(nullptr != grid_density) {
+                    convvdb::saveDensityAsDDS(f, basename, countDigits, output_dir, grid_density);
+                }
+                if(nullptr != grid_emission || nullptr != grid_temperature) {
+                    convvdb::saveAsDDS(f, basename, countDigits, output_dir, grid_emission, grid_temperature);
+                }
+
+            } else {
+                const openvdb::GridBase::Ptr grid_density = nullptr;
+                const openvdb::GridBase::Ptr grid_emission = nullptr;
+                const openvdb::GridBase::Ptr grid_temperature = nullptr;
+                for(const openvdb::GridBase::Ptr& grid: *grids) {
+                    convvdb::saveAsDDS(f, basename, countDigits, output_dir, grid);
+                }
             }
         } catch(const openvdb::Exception& /*Exception*/) {
         }

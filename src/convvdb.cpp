@@ -766,14 +766,19 @@ static bool saveDensityAsDDS(
 }
 
 template<class GridType>
-void copyAsFloat16(uint16_t* pixels, openvdb::GridBase::ConstPtr grid, int32_t element)
+void copyAsFloat16(
+    uint16_t* pixels,
+    openvdb::GridBase::ConstPtr grid,
+    int32_t width,
+    int32_t height,
+    int32_t depth,
+    int32_t offset_x,
+    int32_t offset_y,
+    int32_t offset_z,
+    int32_t element)
 {
     assert(0 <= element && element < 2);
     openvdb::CoordBBox volumeActiveAABB = grid->evalActiveVoxelBoundingBox();
-    openvdb::Coord activeVoxelDim = grid->evalActiveVoxelDim();
-    int32_t width = activeVoxelDim.x() + 1;
-    int32_t height = activeVoxelDim.y() + 1;
-    int32_t depth = activeVoxelDim.z() + 1;
     const GridType* ptr = ((const GridType*)grid.get());
     for(typename GridType::ValueOnCIter iter = ptr->cbeginValueOn(); iter.test(); ++iter) {
         if(!iter.isVoxelValue()) {
@@ -784,6 +789,9 @@ void copyAsFloat16(uint16_t* pixels, openvdb::GridBase::ConstPtr grid, int32_t e
         coord.x() -= volumeActiveAABB.min().x();
         coord.y() -= volumeActiveAABB.min().y();
         coord.z() -= volumeActiveAABB.min().z();
+        coord.x() += offset_x;
+        coord.y() += offset_y;
+        coord.z() += offset_z;
         assert(0 <= coord.x() && coord.x() < width);
         assert(0 <= coord.y() && coord.y() < height);
         assert(0 <= coord.z() && coord.z() < depth);
@@ -804,27 +812,52 @@ static bool saveAsDDS(
     int32_t width = 0;
     int32_t height = 0;
     int32_t depth = 0;
+    int32_t offset_emission_x = 0;
+    int32_t offset_emission_y = 0;
+    int32_t offset_emission_z = 0;
+    int32_t offset_temperature_x = 0;
+    int32_t offset_temperature_y = 0;
+    int32_t offset_temperature_z = 0;
+    openvdb::Coord activeVoxelDim0;
+    openvdb::Coord activeVoxelDim1;
     if(nullptr != grid_emission && nullptr != grid_temperature) {
-        openvdb::Coord activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
-        openvdb::Coord activeVoxelDim1 = grid_temperature->evalActiveVoxelDim();
-        if(activeVoxelDim0.x() != activeVoxelDim1.x()
-           || activeVoxelDim0.y() != activeVoxelDim1.y()
-           || activeVoxelDim0.z() != activeVoxelDim1.z()) {
-            return false;
+        activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
+        activeVoxelDim1 = grid_temperature->evalActiveVoxelDim();
+        width = (std::max)(activeVoxelDim0.x(), activeVoxelDim1.x()) + 1;
+        height = (std::max)(activeVoxelDim0.y(), activeVoxelDim1.y()) + 1;
+        depth = (std::max)(activeVoxelDim0.z(), activeVoxelDim1.z()) + 1;
+        if(activeVoxelDim0.x() < activeVoxelDim1.x()){
+            offset_emission_x = (activeVoxelDim1.x() - activeVoxelDim0.x()) / 2;
+            offset_temperature_x = 0;
+        } else {
+            offset_emission_x = 0;
+            offset_temperature_x = (activeVoxelDim0.x() - activeVoxelDim1.x()) / 2;
         }
-        width = activeVoxelDim0.x() + 1;
-        height = activeVoxelDim0.y() + 1;
-        depth = activeVoxelDim0.z() + 1;
+        if(activeVoxelDim0.y() < activeVoxelDim1.y()) {
+            offset_emission_y = (activeVoxelDim1.y() - activeVoxelDim0.y()) / 2;
+            offset_temperature_y = 0;
+        } else {
+            offset_emission_y = 0;
+            offset_temperature_y = (activeVoxelDim0.y() - activeVoxelDim1.y()) / 2;
+        }
+        if(activeVoxelDim0.z() < activeVoxelDim1.z()) {
+            offset_emission_z = (activeVoxelDim1.z() - activeVoxelDim0.z()) / 2;
+            offset_temperature_z = 0;
+        } else {
+            offset_emission_z = 0;
+            offset_temperature_z = (activeVoxelDim0.z() - activeVoxelDim1.z()) / 2;
+        }
     } else if(nullptr != grid_emission) {
-        openvdb::Coord activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
+        activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
         width = activeVoxelDim0.x() + 1;
         height = activeVoxelDim0.y() + 1;
         depth = activeVoxelDim0.z() + 1;
+
     } else if(nullptr != grid_temperature) {
-        openvdb::Coord activeVoxelDim0 = grid_temperature->evalActiveVoxelDim();
-        width = activeVoxelDim0.x() + 1;
-        height = activeVoxelDim0.y() + 1;
-        depth = activeVoxelDim0.z() + 1;
+        activeVoxelDim1 = grid_temperature->evalActiveVoxelDim();
+        width = activeVoxelDim1.x() + 1;
+        height = activeVoxelDim1.y() + 1;
+        depth = activeVoxelDim1.z() + 1;
     } else {
         return false;
     }
@@ -833,13 +866,13 @@ static bool saveAsDDS(
 
     if(nullptr != grid_emission) {
         if(grid_emission->isType<OpenVDBHalf1Grid>()) {
-            copyAsFloat16<OpenVDBHalf1Grid>(pixels, grid_emission, 0);
+            copyAsFloat16<OpenVDBHalf1Grid>(pixels, grid_emission, width, height, depth, offset_emission_x, offset_emission_y, offset_emission_z, 0);
 
         } else if(grid_emission->isType<OpenVDBFloat1Grid>()) {
-            copyAsFloat16<OpenVDBFloat1Grid>(pixels, grid_emission, 0);
+            copyAsFloat16<OpenVDBFloat1Grid>(pixels, grid_emission, width, height, depth, offset_emission_x, offset_emission_y, offset_emission_z, 0);
 
         } else if(grid_emission->isType<OpenVDBDouble1Grid>()) {
-            copyAsFloat16<OpenVDBDouble1Grid>(pixels, grid_emission, 0);
+            copyAsFloat16<OpenVDBDouble1Grid>(pixels, grid_emission, width, height, depth, offset_emission_x, offset_emission_y, offset_emission_z, 0);
         } else {
             delete[] pixels;
             return false;
@@ -848,13 +881,13 @@ static bool saveAsDDS(
 
     if(nullptr != grid_temperature) {
         if(grid_temperature->isType<OpenVDBHalf1Grid>()) {
-            copyAsFloat16<OpenVDBHalf1Grid>(pixels, grid_temperature, 1);
+            copyAsFloat16<OpenVDBHalf1Grid>(pixels, grid_temperature, width, height, depth, offset_temperature_x, offset_temperature_y, offset_temperature_z, 1);
 
         } else if(grid_temperature->isType<OpenVDBFloat1Grid>()) {
-            copyAsFloat16<OpenVDBFloat1Grid>(pixels, grid_temperature, 1);
+            copyAsFloat16<OpenVDBFloat1Grid>(pixels, grid_temperature, width, height, depth, offset_temperature_x, offset_temperature_y, offset_temperature_z, 1);
 
         } else if(grid_temperature->isType<OpenVDBDouble1Grid>()) {
-            copyAsFloat16<OpenVDBDouble1Grid>(pixels, grid_temperature, 1);
+            copyAsFloat16<OpenVDBDouble1Grid>(pixels, grid_temperature, width, height, depth, offset_temperature_x, offset_temperature_y, offset_temperature_z, 1);
         } else {
             delete[] pixels;
             return false;

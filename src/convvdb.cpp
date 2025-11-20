@@ -669,13 +669,19 @@ bool saveDensityAsDDS(
     const std::u8string& basename,
     int32_t countDigits,
     const std::u8string& output_dir,
+    int32_t width,
+    int32_t height,
+    int32_t depth,
     openvdb::GridBase::ConstPtr grid)
 {
     openvdb::CoordBBox volumeActiveAABB = grid->evalActiveVoxelBoundingBox();
     openvdb::Coord activeVoxelDim = grid->evalActiveVoxelDim();
-    int32_t width = activeVoxelDim.x() + 1;
-    int32_t height = activeVoxelDim.y() + 1;
-    int32_t depth = activeVoxelDim.z() + 1;
+    int32_t w = activeVoxelDim.x() + 1;
+    int32_t h = activeVoxelDim.y() + 1;
+    int32_t d = activeVoxelDim.z() + 1;
+    int32_t offset_x = ((std::abs)(w - width) / 2);
+    int32_t offset_y = ((std::abs)(h - height) / 2);
+    int32_t offset_z = ((std::abs)(d - depth) / 2);
     uint8_t* pixels = new uint8_t[width * height * depth];
     ::memset(pixels, 0, sizeof(uint8_t) * width * height * depth);
     const GridType* ptr = ((const GridType*)grid.get());
@@ -688,6 +694,9 @@ bool saveDensityAsDDS(
         coord.x() -= volumeActiveAABB.min().x();
         coord.y() -= volumeActiveAABB.min().y();
         coord.z() -= volumeActiveAABB.min().z();
+        coord.x() += offset_x;
+        coord.y() += offset_y;
+        coord.z() += offset_z;
         assert(0 <= coord.x() && coord.x() < width);
         assert(0 <= coord.y() && coord.y() < height);
         assert(0 <= coord.z() && coord.z() < depth);
@@ -750,17 +759,20 @@ static bool saveDensityAsDDS(
     const std::u8string& basename,
     int32_t countDigits,
     const std::u8string& output_dir,
+    int32_t width,
+    int32_t height,
+    int32_t depth,
     openvdb::GridBase::ConstPtr grid_density)
 {
     assert(nullptr != grid_density);
     if(grid_density->isType<OpenVDBHalf1Grid>()) {
-        return saveDensityAsDDS<OpenVDBHalf1Grid>(path, basename, countDigits, output_dir, grid_density);
+        return saveDensityAsDDS<OpenVDBHalf1Grid>(path, basename, countDigits, output_dir, width, height, depth, grid_density);
 
     } else if(grid_density->isType<OpenVDBFloat1Grid>()) {
-        return saveDensityAsDDS<OpenVDBFloat1Grid>(path, basename, countDigits, output_dir, grid_density);
+        return saveDensityAsDDS<OpenVDBFloat1Grid>(path, basename, countDigits, output_dir, width, height, depth, grid_density);
 
     } else if(grid_density->isType<OpenVDBDouble1Grid>()) {
-        return saveDensityAsDDS<OpenVDBDouble1Grid>(path, basename, countDigits, output_dir, grid_density);
+        return saveDensityAsDDS<OpenVDBDouble1Grid>(path, basename, countDigits, output_dir, width, height, depth, grid_density);
     }
     return false;
 }
@@ -805,13 +817,13 @@ static bool saveAsDDS(
     const std::u8string& basename,
     int32_t countDigits,
     const std::u8string& output_dir,
+    int32_t width,
+    int32_t height,
+    int32_t depth,
     openvdb::GridBase::ConstPtr grid_emission,
     openvdb::GridBase::ConstPtr grid_temperature)
 {
     assert(nullptr != grid_emission || nullptr != grid_temperature);
-    int32_t width = 0;
-    int32_t height = 0;
-    int32_t depth = 0;
     int32_t offset_emission_x = 0;
     int32_t offset_emission_y = 0;
     int32_t offset_emission_z = 0;
@@ -823,41 +835,26 @@ static bool saveAsDDS(
     if(nullptr != grid_emission && nullptr != grid_temperature) {
         activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
         activeVoxelDim1 = grid_temperature->evalActiveVoxelDim();
-        width = (std::max)(activeVoxelDim0.x(), activeVoxelDim1.x()) + 1;
-        height = (std::max)(activeVoxelDim0.y(), activeVoxelDim1.y()) + 1;
-        depth = (std::max)(activeVoxelDim0.z(), activeVoxelDim1.z()) + 1;
-        if(activeVoxelDim0.x() < activeVoxelDim1.x()){
-            offset_emission_x = (activeVoxelDim1.x() - activeVoxelDim0.x()) / 2;
-            offset_temperature_x = 0;
-        } else {
-            offset_emission_x = 0;
-            offset_temperature_x = (activeVoxelDim0.x() - activeVoxelDim1.x()) / 2;
-        }
-        if(activeVoxelDim0.y() < activeVoxelDim1.y()) {
-            offset_emission_y = (activeVoxelDim1.y() - activeVoxelDim0.y()) / 2;
-            offset_temperature_y = 0;
-        } else {
-            offset_emission_y = 0;
-            offset_temperature_y = (activeVoxelDim0.y() - activeVoxelDim1.y()) / 2;
-        }
-        if(activeVoxelDim0.z() < activeVoxelDim1.z()) {
-            offset_emission_z = (activeVoxelDim1.z() - activeVoxelDim0.z()) / 2;
-            offset_temperature_z = 0;
-        } else {
-            offset_emission_z = 0;
-            offset_temperature_z = (activeVoxelDim0.z() - activeVoxelDim1.z()) / 2;
-        }
+
+        offset_emission_x = ((std::abs)(activeVoxelDim0.x() - width) / 2);
+        offset_emission_y = ((std::abs)(activeVoxelDim0.y() - height) / 2);
+        offset_emission_z = ((std::abs)(activeVoxelDim0.z() - depth) / 2);
+
+        offset_temperature_x = ((std::abs)(activeVoxelDim1.x() - width) / 2);
+        offset_temperature_y = ((std::abs)(activeVoxelDim1.y() - height) / 2);
+        offset_temperature_z = ((std::abs)(activeVoxelDim1.z() - depth) / 2);
+
     } else if(nullptr != grid_emission) {
         activeVoxelDim0 = grid_emission->evalActiveVoxelDim();
-        width = activeVoxelDim0.x() + 1;
-        height = activeVoxelDim0.y() + 1;
-        depth = activeVoxelDim0.z() + 1;
+        offset_emission_x = ((std::abs)(activeVoxelDim0.x() - width) / 2);
+        offset_emission_y = ((std::abs)(activeVoxelDim0.y() - height) / 2);
+        offset_emission_z = ((std::abs)(activeVoxelDim0.z() - depth) / 2);
 
     } else if(nullptr != grid_temperature) {
         activeVoxelDim1 = grid_temperature->evalActiveVoxelDim();
-        width = activeVoxelDim1.x() + 1;
-        height = activeVoxelDim1.y() + 1;
-        depth = activeVoxelDim1.z() + 1;
+        offset_temperature_x = ((std::abs)(activeVoxelDim1.x() - width) / 2);
+        offset_temperature_y = ((std::abs)(activeVoxelDim1.y() - height) / 2);
+        offset_temperature_z = ((std::abs)(activeVoxelDim1.z() - depth) / 2);
     } else {
         return false;
     }
@@ -1085,17 +1082,39 @@ int main(int argc, char** argv)
                         grid_temperature = grid;
                     }
                 }
+                int32_t width = 0;
+                int32_t height = 0;
+                int32_t depth = 0;
                 if(nullptr != grid_density) {
-                    convvdb::saveDensityAsDDS(f, basename, countDigits, output_dir, grid_density);
+                    openvdb::Coord activeVoxelDim = grid_density->evalActiveVoxelDim();
+                    width = (std::max)(width, activeVoxelDim.x());
+                    height = (std::max)(height, activeVoxelDim.y());
+                    depth = (std::max)(depth, activeVoxelDim.z());
+                }
+                if(nullptr != grid_emission) {
+                    openvdb::Coord activeVoxelDim = grid_emission->evalActiveVoxelDim();
+                    width = (std::max)(width, activeVoxelDim.x());
+                    height = (std::max)(height, activeVoxelDim.y());
+                    depth = (std::max)(depth, activeVoxelDim.z());
+                }
+                if(nullptr != grid_temperature) {
+                    openvdb::Coord activeVoxelDim = grid_temperature->evalActiveVoxelDim();
+                    width = (std::max)(width, activeVoxelDim.x());
+                    height = (std::max)(height, activeVoxelDim.y());
+                    depth = (std::max)(depth, activeVoxelDim.z());
+                }
+                width += 1;
+                height += 1;
+                depth += 1;
+
+                if(nullptr != grid_density) {
+                    convvdb::saveDensityAsDDS(f, basename, countDigits, output_dir, width, height, depth, grid_density);
                 }
                 if(nullptr != grid_emission || nullptr != grid_temperature) {
-                    convvdb::saveAsDDS(f, basename, countDigits, output_dir, grid_emission, grid_temperature);
+                    convvdb::saveAsDDS(f, basename, countDigits, output_dir, width, height, depth, grid_emission, grid_temperature);
                 }
 
             } else {
-                const openvdb::GridBase::Ptr grid_density = nullptr;
-                const openvdb::GridBase::Ptr grid_emission = nullptr;
-                const openvdb::GridBase::Ptr grid_temperature = nullptr;
                 for(const openvdb::GridBase::Ptr& grid: *grids) {
                     convvdb::saveAsDDS(f, basename, countDigits, output_dir, grid);
                 }

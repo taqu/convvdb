@@ -20,6 +20,7 @@ include_directories(AFTER ${THIRDPARTY_ROOT}/tbb)
 set(OPENVDB_ROOT ${THIRDPARTY_ROOT}/openvdb)
 set(OPENVDB_INCLUDE ${OPENVDB_ROOT}/include)
 set(OPENVDB_LIB ${OPENVDB_ROOT}/lib)
+set(OPENVDB_BIN ${OPENVDB_ROOT}/bin)
 
 include_directories(AFTER ${OPENVDB_INCLUDE})
 link_directories(AFTER ${OPENVDB_LIB})
@@ -78,4 +79,13 @@ set_target_properties(${PROJECT_NAME}
         OUTPUT_NAME_DEBUG "${PROJECT_NAME}" OUTPUT_NAME_RELEASE "${PROJECT_NAME}"
         VS_DEBUGGER_COMMAND_ARGUMENTS "SmallCampfireVDB/smallCampfire_0000.vdb --output=output"
         VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-
+file(GLOB DLLS 
+     "${OPENVDB_BIN}/*.dll"
+)
+message(${DLLS})
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${DLLS}
+    $<TARGET_FILE_DIR:${PROJECT_NAME}>
+)
